@@ -35,16 +35,16 @@ npx @deepseek-ai/dsh plugin --profile web add dsh-ammeter
 锁定版本：
 
 ```bash
-npx @deepseek-ai/dsh plugin --profile web add github:maxli776/dsh-minimax-usage#v1.0.0
+npx @deepseek-ai/dsh plugin --profile web add github:maxli776/dsh-ammeter#v1.0.0
 ```
 
 或默认分支最新：
 
 ```bash
-npx @deepseek-ai/dsh plugin --profile web add github:maxli776/dsh-minimax-usage
+npx @deepseek-ai/dsh plugin --profile web add github:maxli776/dsh-ammeter
 ```
 
-> 仓库名暂时还叫 `dsh-minimax-usage`（GitHub 改名需在网页端操作），包名与插件标识已经是 `dsh-ammeter`。
+> 仓库名、包名与插件标识现在统一为 `dsh-ammeter`。
 
 ### 构建脚本授权
 

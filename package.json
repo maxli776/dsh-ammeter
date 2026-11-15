@@ -54,7 +54,7 @@
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/maxli776/dsh-minimax-usage.git"
+    "url": "git+https://github.com/maxli776/dsh-ammeter.git"
   },
   "keywords": [
     "ammeter",
