@@ -8,6 +8,13 @@ function jsonResponse(body: unknown, status = 200): Response {
   });
 }
 
+const minimaxPayload = (percent: number) => ({
+  model_remains: [
+    { model_name: "general", current_interval_remaining_percent: percent },
+  ],
+  base_resp: { status_code: 0, status_msg: "success" },
+});
+
 describe("UsageService", () => {
   it("reports unconfigured when no keys exist", async () => {
     const service = new UsageService({ get: () => undefined }, { env: {} });
@@ -25,12 +32,7 @@ describe("UsageService", () => {
         env: { MINIMAX_API_KEY: "sk-global" },
         fetchImpl: async () => {
           calls += 1;
-          return jsonResponse({
-            model_remains: [
-              { model_name: "general", current_interval_remaining_percent: 70 },
-            ],
-            base_resp: { status_code: 0, status_msg: "success" },
-          });
+          return jsonResponse(minimaxPayload(70));
         },
       },
     );
@@ -38,8 +40,8 @@ describe("UsageService", () => {
     const first = await service.snapshot(false, "startup");
     const second = await service.snapshot(false, "startup");
     expect(calls).toBe(1);
-    expect(first.accounts[0]?.models[0]?.intervalRemainingPercent).toBe(70);
-    expect(second.accounts[0]?.models[0]?.intervalRemainingPercent).toBe(70);
+    expect(first.accounts[0]?.entries[0]?.windows[0]?.remainingPercent).toBe(70);
+    expect(second.accounts[0]?.entries[0]?.windows[0]?.remainingPercent).toBe(70);
   });
 
   it("force refresh bypasses the cache", async () => {
@@ -50,12 +52,7 @@ describe("UsageService", () => {
         env: { MINIMAX_API_KEY: "sk-global" },
         fetchImpl: async () => {
           calls += 1;
-          return jsonResponse({
-            model_remains: [
-              { model_name: "general", current_interval_remaining_percent: calls === 1 ? 70 : 40 },
-            ],
-            base_resp: { status_code: 0, status_msg: "success" },
-          });
+          return jsonResponse(minimaxPayload(calls === 1 ? 70 : 40));
         },
       },
     );
@@ -63,7 +60,7 @@ describe("UsageService", () => {
     await service.snapshot();
     const refreshed = await service.snapshot(true);
     expect(calls).toBe(2);
-    expect(refreshed.accounts[0]?.models[0]?.intervalRemainingPercent).toBe(40);
+    expect(refreshed.accounts[0]?.entries[0]?.windows[0]?.remainingPercent).toBe(40);
   });
 
   it("keeps the last good snapshot when a later fetch fails", async () => {
@@ -74,14 +71,7 @@ describe("UsageService", () => {
         env: { MINIMAX_CN_API_KEY: "sk-cn" },
         fetchImpl: async () => {
           calls += 1;
-          if (calls === 1) {
-            return jsonResponse({
-              model_remains: [
-                { model_name: "general", current_interval_remaining_percent: 88 },
-              ],
-              base_resp: { status_code: 0, status_msg: "success" },
-            });
-          }
+          if (calls === 1) return jsonResponse(minimaxPayload(88));
           return jsonResponse({ error: "boom" }, 500);
         },
       },
@@ -91,7 +81,7 @@ describe("UsageService", () => {
     const failed = await service.snapshot(true);
     expect(failed.accounts[0]?.ok).toBe(true);
     expect(failed.accounts[0]?.stale).toBe(true);
-    expect(failed.accounts[0]?.models[0]?.intervalRemainingPercent).toBe(88);
+    expect(failed.accounts[0]?.entries[0]?.windows[0]?.remainingPercent).toBe(88);
     expect(failed.accounts[0]?.error).toMatch(/可能过期/);
   });
 
@@ -114,12 +104,7 @@ describe("UsageService", () => {
         env: { MINIMAX_CN_API_KEY: "sk-cn" },
         fetchImpl: async () => {
           calls += 1;
-          return jsonResponse({
-            model_remains: [
-              { model_name: "general", current_interval_remaining_percent: 77 },
-            ],
-            base_resp: { status_code: 0, status_msg: "success" },
-          });
+          return jsonResponse(minimaxPayload(77));
         },
       },
     );
@@ -130,7 +115,7 @@ describe("UsageService", () => {
     const snap = await service.snapshot(false, "startup");
     expect(snap.phase).toBe("ready");
     expect(snap.error).toBeUndefined();
-    expect(snap.accounts[0]?.models[0]?.intervalRemainingPercent).toBe(77);
+    expect(snap.accounts[0]?.entries[0]?.windows[0]?.remainingPercent).toBe(77);
     expect(calls).toBe(1);
   });
 
@@ -142,5 +127,28 @@ describe("UsageService", () => {
     const snap = await service.snapshot(false, "startup");
     expect(snap.phase).toBe("ready");
     expect(snap.error).toMatch(/未配置/);
+  });
+
+  it("reports every configured subscription, each in its own account", async () => {
+    const service = new UsageService(
+      { get: () => undefined },
+      {
+        env: { OPENCODE_GO_API_KEY: "sk-go", GLM_API_KEY: "sk-glm" },
+        fetchImpl: async (url) => {
+          if (url.includes("opencode.ai")) {
+            return jsonResponse({ usage: { weekly: { percent: 46 } } });
+          }
+          return jsonResponse({
+            success: true,
+            data: { level: "pro", limits: [{ type: "TOKENS_LIMIT", unit: 3, percentage: 15 }] },
+          });
+        },
+      },
+    );
+    service.markReady();
+    const snap = await service.snapshot();
+    expect(snap.accounts.map((account) => account.id)).toEqual(["opencode-go", "glm"]);
+    expect(snap.accounts[0]?.entries[0]?.windows[0]?.remainingPercent).toBe(54);
+    expect(snap.accounts[1]?.entries[0]?.windows[0]?.remainingPercent).toBe(85);
   });
 });

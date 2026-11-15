@@ -1,4 +1,4 @@
-import { CACHE_TTL_MS, type AccountSnapshot, type Region } from "./types.js";
+import { CACHE_TTL_MS, type AccountId, type AccountSnapshot } from "./types.js";
 
 interface CacheEntry {
   at: number;
@@ -7,25 +7,25 @@ interface CacheEntry {
 
 export class UsageCache {
   private readonly ttlMs: number;
-  private readonly entries = new Map<Region, CacheEntry>();
+  private readonly entries = new Map<AccountId, CacheEntry>();
 
   constructor(ttlMs = CACHE_TTL_MS) {
     this.ttlMs = ttlMs;
   }
 
-  get(region: Region, now = Date.now()): CacheEntry | undefined {
-    const entry = this.entries.get(region);
+  get(accountId: AccountId, now = Date.now()): CacheEntry | undefined {
+    const entry = this.entries.get(accountId);
     if (entry === undefined) return undefined;
     if (now - entry.at > this.ttlMs) return undefined;
     return entry;
   }
 
-  peek(region: Region): CacheEntry | undefined {
-    return this.entries.get(region);
+  peek(accountId: AccountId): CacheEntry | undefined {
+    return this.entries.get(accountId);
   }
 
-  set(region: Region, account: AccountSnapshot, now = Date.now()): void {
-    this.entries.set(region, { at: now, account });
+  set(accountId: AccountId, account: AccountSnapshot, now = Date.now()): void {
+    this.entries.set(accountId, { at: now, account });
   }
 
   clear(): void {

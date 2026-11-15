@@ -1,5 +1,5 @@
 /**
- * dsh-minimax-usage client half — compact Token Plan quota indicator beside
+ * dsh-ammeter client half — compact subscription quota indicator beside
  * the conversation model selector.
  *
  * Authored directly in the DSH client module format (window.__ModuleLoader__).
@@ -7,7 +7,7 @@
  * refresh scheduling; this half reads only the plugin-owned JSON endpoints.
  */
 window.__ModuleLoader__.load({
-	id: "dsh-minimax-usage",
+	id: "dsh-ammeter",
 	factory: (require) => {
 		var module = { exports: {} };
 		var exports = module.exports;
@@ -19,67 +19,87 @@ window.__ModuleLoader__.load({
 		// session-scoped inject below so every composer observes its own model.
 		const inject = ["slots"];
 		const POLL_MS = 15000;
-		const REGION_LABEL = { global: "国际站", cn: "国内站" };
+
+		// Provider id -> account id. Mirrors the Host-side registry
+		// (src/accounts.ts); the two halves ship as separate bundles.
+		const PROVIDER_ACCOUNT = {
+			"minimax": "minimax-global",
+			"minimax-cn": "minimax-cn",
+			"opencode-go": "opencode-go",
+			"zai": "glm",
+			"zai-coding-plan": "glm",
+			"zai-coding-cn": "glm",
+			"glm": "glm",
+			"glm-cn": "glm",
+			"zhipu": "glm",
+			"bigmodel": "glm",
+		};
+		const ACCOUNT_SHORT = {
+			"minimax-global": "国际站",
+			"minimax-cn": "国内站",
+			"opencode-go": "OpenCode Go",
+			"glm": "GLM 套餐",
+		};
 
 		const css = [
 			// === inline quota cell ===
-			".mxu_inline_host{display:inline-flex;position:relative;flex:none;align-items:center;height:28px;margin:0 2px;z-index:1}",
-			".mxu_inline{appearance:none;-webkit-appearance:none;display:inline-flex;align-items:center;justify-content:center;width:70px;min-height:28px;padding:0;border:0;border-radius:8px;background:transparent;color:var(--dsw-alias-label-secondary,#8b93a1);cursor:pointer;font:inherit;line-height:1;user-select:none;transition:background .14s ease,opacity .14s ease,transform .14s ease}",
-			".mxu_inline:hover{background:var(--dsw-alias-interactive-bg-hover,rgba(128,128,128,.12))}",
-			".mxu_inline:focus-visible{outline:none;box-shadow:0 0 0 2px var(--dsw-alias-border-l3,#8ea3ff)}",
-			".mxu_inline:active{transform:scale(.98)}",
-			".mxu_inline[data-busy=true]{background:color-mix(in srgb,#818cf8 12%,transparent)}",
-			".mxu_inline_rows{display:inline-flex;flex-direction:column;align-items:center;justify-content:center;gap:3px;width:70px}",
-			".mxu_inline_line{display:inline-flex;align-items:center;gap:4px;width:70px;height:6px}",
-			".mxu_inline_label{display:inline-block;width:18px;color:var(--dsw-alias-label-tertiary,#8b93a1);font-size:9px;font-weight:600;line-height:10px;text-align:right;letter-spacing:.01em}",
-			".mxu_inline_track{display:block;width:48px;height:6px;border-radius:999px;background:var(--dsw-alias-border-l2,rgba(128,128,128,.28));overflow:hidden}",
-			".mxu_inline_fill{display:block;height:100%;min-width:0;border-radius:inherit;transition:width .45s cubic-bezier(.3,.7,.4,1),background-color .2s ease}",
-			".mxu_inline_fill.ok{background:var(--dsw-alias-state-success-primary,#22c55e)}",
-			".mxu_inline_fill.warn{background:var(--dsw-alias-state-warn-primary,#f59e0b)}",
-			".mxu_inline_fill.danger{background:var(--dsw-alias-state-error-primary,#ef4444)}",
-			".mxu_inline_fill.muted{background:var(--dsw-alias-label-tertiary,#64748b);opacity:.55}",
-			".mxu_inline_fill.loading{width:55%;background:linear-gradient(90deg,#7c8cff,#a5b4fc,#7c8cff);background-size:200% 100%;animation:mxu_inline_loading 1.4s ease-in-out infinite}",
-			"@keyframes mxu_inline_loading{0%{background-position:100% 0;opacity:.42}50%{opacity:.9}100%{background-position:0 0;opacity:.42}}",
+			".am_inline_host{display:inline-flex;position:relative;flex:none;align-items:center;height:28px;margin:0 2px;z-index:1}",
+			".am_inline{appearance:none;-webkit-appearance:none;display:inline-flex;align-items:center;justify-content:center;width:70px;min-height:28px;padding:0;border:0;border-radius:8px;background:transparent;color:var(--dsw-alias-label-secondary,#8b93a1);cursor:pointer;font:inherit;line-height:1;user-select:none;transition:background .14s ease,opacity .14s ease,transform .14s ease}",
+			".am_inline:hover{background:var(--dsw-alias-interactive-bg-hover,rgba(128,128,128,.12))}",
+			".am_inline:focus-visible{outline:none;box-shadow:0 0 0 2px var(--dsw-alias-border-l3,#8ea3ff)}",
+			".am_inline:active{transform:scale(.98)}",
+			".am_inline[data-busy=true]{background:color-mix(in srgb,#818cf8 12%,transparent)}",
+			".am_inline_rows{display:inline-flex;flex-direction:column;align-items:center;justify-content:center;gap:2px;width:70px}",
+			".am_inline_line{display:inline-flex;align-items:center;gap:4px;width:70px;height:6px}",
+			".am_inline_label{display:inline-block;width:18px;color:var(--dsw-alias-label-tertiary,#8b93a1);font-size:9px;font-weight:600;line-height:10px;text-align:right;letter-spacing:.01em}",
+			".am_inline_track{display:block;width:48px;height:6px;border-radius:999px;background:var(--dsw-alias-border-l2,rgba(128,128,128,.28));overflow:hidden}",
+			".am_inline_fill{display:block;height:100%;min-width:0;border-radius:inherit;transition:width .45s cubic-bezier(.3,.7,.4,1),background-color .2s ease}",
+			".am_inline_fill.ok{background:var(--dsw-alias-state-success-primary,#22c55e)}",
+			".am_inline_fill.warn{background:var(--dsw-alias-state-warn-primary,#f59e0b)}",
+			".am_inline_fill.danger{background:var(--dsw-alias-state-error-primary,#ef4444)}",
+			".am_inline_fill.muted{background:var(--dsw-alias-label-tertiary,#64748b);opacity:.55}",
+			".am_inline_fill.loading{width:55%;background:linear-gradient(90deg,#7c8cff,#a5b4fc,#7c8cff);background-size:200% 100%;animation:am_inline_loading 1.4s ease-in-out infinite}",
+			"@keyframes am_inline_loading{0%{background-position:100% 0;opacity:.42}50%{opacity:.9}100%{background-position:0 0;opacity:.42}}",
 
 			// === compact tooltip ===
-			".mxu_inline_tip{pointer-events:none;position:absolute;right:0;bottom:calc(100% + 7px);width:296px;box-sizing:border-box;padding:12px 13px 10px;border:1px solid color-mix(in srgb,var(--dsw-alias-border-l1,#fff) 18%,transparent);border-radius:13px;background:var(--dsw-alias-bg-overlay,#16181d);color:var(--dsw-alias-label-primary,#e8eaed);box-shadow:0 14px 34px rgba(0,0,0,.28);z-index:1000;line-height:1.35}",
-			".mxu_inline_tip_head{display:flex;align-items:flex-start;justify-content:space-between;gap:10px;margin-bottom:8px}",
-			".mxu_inline_tip_title{font-size:12px;font-weight:700;letter-spacing:-.01em}",
-			".mxu_inline_tip_sub{margin-top:2px;color:var(--dsw-alias-label-secondary,#8b93a1);font-size:10px}",
-			".mxu_inline_tip_live{color:var(--dsw-alias-label-secondary,#8b93a1);font-size:10px;white-space:nowrap}",
-			".mxu_inline_tip_error{margin:0 0 8px;padding:6px 8px;border-radius:8px;background:color-mix(in srgb,#f43f5e 13%,transparent);color:#fda4af;font-size:10px;line-height:1.45}",
-			".mxu_inline_tip_empty{padding:8px 2px;color:var(--dsw-alias-label-secondary,#8b93a1);font-size:10px;text-align:center}",
-			".mxu_inline_account{margin-top:7px;padding:8px 9px;border-radius:9px;background:color-mix(in srgb,var(--dsw-alias-bg-layer-1,#fff) 7%,transparent);border:1px solid color-mix(in srgb,var(--dsw-alias-border-l1,#fff) 9%,transparent)}",
-			".mxu_inline_account:first-of-type{margin-top:0}",
-			".mxu_inline_account_selected{border-color:color-mix(in srgb,#818cf8 38%,transparent)}",
-			".mxu_inline_account_head{display:flex;align-items:center;gap:6px;margin-bottom:6px}",
-			".mxu_inline_chip{padding:2px 6px;border-radius:999px;background:color-mix(in srgb,#818cf8 16%,transparent);color:#a5b4fc;font-size:9px;font-weight:700}",
-			".mxu_inline_account_name{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:10.5px;font-weight:650}",
-			".mxu_inline_stale{margin-left:auto;color:#fbbf24;font-size:9px;white-space:nowrap}",
-			".mxu_inline_account_error{margin:0 0 6px;color:#fda4af;font-size:10px;line-height:1.4}",
-			".mxu_inline_model{margin-top:6px}",
-			".mxu_inline_model:first-of-type{margin-top:0}",
-			".mxu_inline_model_name{margin-bottom:4px;color:var(--dsw-alias-label-secondary,#8b93a1);font-size:9.5px;font-weight:650;text-transform:uppercase;letter-spacing:.02em}",
-			".mxu_inline_metric{display:flex;align-items:baseline;justify-content:space-between;gap:8px;margin-top:2px;color:var(--dsw-alias-label-secondary,#8b93a1);font-size:10px}",
-			".mxu_inline_metric b{color:var(--dsw-alias-label-primary,#f4f6f9);font-size:10px;font-weight:700;font-variant-numeric:tabular-nums}",
-			".mxu_inline_hint{margin-top:8px;padding-top:7px;border-top:1px dashed color-mix(in srgb,var(--dsw-alias-border-l1,#fff) 14%,transparent);color:var(--dsw-alias-label-tertiary,#8b93a1);font-size:9.5px;line-height:1.45}",
+			".am_inline_tip{pointer-events:none;position:absolute;right:0;bottom:calc(100% + 7px);width:296px;box-sizing:border-box;padding:12px 13px 10px;border:1px solid color-mix(in srgb,var(--dsw-alias-border-l1,#fff) 18%,transparent);border-radius:13px;background:var(--dsw-alias-bg-overlay,#16181d);color:var(--dsw-alias-label-primary,#e8eaed);box-shadow:0 14px 34px rgba(0,0,0,.28);z-index:1000;line-height:1.35}",
+			".am_inline_tip_head{display:flex;align-items:flex-start;justify-content:space-between;gap:10px;margin-bottom:8px}",
+			".am_inline_tip_title{font-size:12px;font-weight:700;letter-spacing:-.01em}",
+			".am_inline_tip_sub{margin-top:2px;color:var(--dsw-alias-label-secondary,#8b93a1);font-size:10px}",
+			".am_inline_tip_live{color:var(--dsw-alias-label-secondary,#8b93a1);font-size:10px;white-space:nowrap}",
+			".am_inline_tip_error{margin:0 0 8px;padding:6px 8px;border-radius:8px;background:color-mix(in srgb,#f43f5e 13%,transparent);color:#fda4af;font-size:10px;line-height:1.45}",
+			".am_inline_tip_empty{padding:8px 2px;color:var(--dsw-alias-label-secondary,#8b93a1);font-size:10px;text-align:center}",
+			".am_inline_account{margin-top:7px;padding:8px 9px;border-radius:9px;background:color-mix(in srgb,var(--dsw-alias-bg-layer-1,#fff) 7%,transparent);border:1px solid color-mix(in srgb,var(--dsw-alias-border-l1,#fff) 9%,transparent)}",
+			".am_inline_account:first-of-type{margin-top:0}",
+			".am_inline_account_selected{border-color:color-mix(in srgb,#818cf8 38%,transparent)}",
+			".am_inline_account_head{display:flex;align-items:center;gap:6px;margin-bottom:6px}",
+			".am_inline_chip{padding:2px 6px;border-radius:999px;background:color-mix(in srgb,#818cf8 16%,transparent);color:#a5b4fc;font-size:9px;font-weight:700}",
+			".am_inline_account_name{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:10.5px;font-weight:650}",
+			".am_inline_stale{margin-left:auto;color:#fbbf24;font-size:9px;white-space:nowrap}",
+			".am_inline_account_error{margin:0 0 6px;color:#fda4af;font-size:10px;line-height:1.4}",
+			".am_inline_model{margin-top:6px}",
+			".am_inline_model:first-of-type{margin-top:0}",
+			".am_inline_model_name{margin-bottom:4px;color:var(--dsw-alias-label-secondary,#8b93a1);font-size:9.5px;font-weight:650;text-transform:uppercase;letter-spacing:.02em}",
+			".am_inline_metric{display:flex;align-items:baseline;justify-content:space-between;gap:8px;margin-top:2px;color:var(--dsw-alias-label-secondary,#8b93a1);font-size:10px}",
+			".am_inline_metric b{color:var(--dsw-alias-label-primary,#f4f6f9);font-size:10px;font-weight:700;font-variant-numeric:tabular-nums}",
+			".am_inline_hint{margin-top:8px;padding-top:7px;border-top:1px dashed color-mix(in srgb,var(--dsw-alias-border-l1,#fff) 14%,transparent);color:var(--dsw-alias-label-secondary,#8b93a1);font-size:9.5px;line-height:1.45}",
 		].join("");
 
 		if (typeof document !== "undefined") {
-			const existing = document.querySelector('style[data-plugin-css="dsh-minimax-usage"]');
+			const existing = document.querySelector('style[data-plugin-css="dsh-ammeter"]');
 			if (existing) {
 				existing.textContent = css;
 			} else {
 				const tag = document.createElement("style");
-				tag.dataset.plugin = "dsh-minimax-usage";
-				tag.dataset.pluginCss = "dsh-minimax-usage";
+				tag.dataset.plugin = "dsh-ammeter";
+				tag.dataset.pluginCss = "dsh-ammeter";
 				tag.textContent = css;
 				document.head.appendChild(tag);
 			}
 		}
 
 		function api(path, options) {
-			return fetch("/minimax-usage/api" + path, {
+			return fetch("/dsh-ammeter/api" + path, {
 				headers: { "Content-Type": "application/json" },
 				...options,
 			}).then(async (resp) => ({
@@ -89,10 +109,9 @@ window.__ModuleLoader__.load({
 			}));
 		}
 
-		function minimaxRegion(provider) {
-			if (provider === "minimax-cn") return "cn";
-			if (provider === "minimax") return "global";
-			return undefined;
+		function accountOfProvider(provider) {
+			if (typeof provider !== "string" || provider.length === 0) return undefined;
+			return PROVIDER_ACCOUNT[provider];
 		}
 
 		function toneOf(percent) {
@@ -130,18 +149,29 @@ window.__ModuleLoader__.load({
 			}
 		}
 
-		function accountForSelection(accounts, region, modelId) {
-			const account = (accounts || []).find((item) => item && item.region === region);
-			if (!account) return { account: undefined, model: undefined };
-			const wanted = typeof modelId === "string" ? modelId.toLowerCase() : "";
-			const exact = wanted
-				? (account.models || []).find((item) => item && String(item.name).toLowerCase() === wanted)
-				: undefined;
-			const fallback = (account.models || []).find((item) => item && item.included !== false) || (account.models || [])[0];
-			return { account, model: exact || fallback };
+		function windowsOf(entry) {
+			return entry && Array.isArray(entry.windows) ? entry.windows : [];
 		}
 
-		function useUsage(enabled, region) {
+		/**
+		 * The account of the currently selected provider, and the row inside it
+		 * that matches the selected model (MiniMax reports per model; the other
+		 * subscriptions report a single account-level row).
+		 */
+		function accountForSelection(accounts, accountId, modelId) {
+			const account = (accounts || []).find((item) => item && item.id === accountId);
+			if (!account) return { account: undefined, entry: undefined };
+			const entries = Array.isArray(account.entries) ? account.entries : [];
+			const wanted = typeof modelId === "string" ? modelId.toLowerCase() : "";
+			const exact = wanted
+				? entries.find((item) => item && String(item.name).toLowerCase() === wanted)
+				: undefined;
+			const fallback =
+				entries.find((item) => item && item.included !== false) || entries[0];
+			return { account, entry: exact || fallback };
+		}
+
+		function useUsage(enabled, accountId) {
 			const [data, setData] = react.useState(null);
 			const [busy, setBusy] = react.useState(false);
 			const [tick, setTick] = react.useState(0);
@@ -160,7 +190,7 @@ window.__ModuleLoader__.load({
 					.finally(() => {
 						if (seq === requestSeq.current && force) setBusy(false);
 					});
-			}, [enabled, region]);
+			}, [enabled, accountId]);
 
 			react.useEffect(() => {
 				++requestSeq.current;
@@ -171,13 +201,13 @@ window.__ModuleLoader__.load({
 				}
 				load(false);
 				return () => { ++requestSeq.current; };
-			}, [enabled, region, load]);
+			}, [enabled, accountId, load]);
 
 			react.useEffect(() => {
 				if (!enabled) return undefined;
 				const id = setInterval(() => load(false), POLL_MS);
 				return () => clearInterval(id);
-			}, [enabled, region, load]);
+			}, [enabled, accountId, load]);
 
 			react.useEffect(() => {
 				if (!enabled) return undefined;
@@ -193,11 +223,11 @@ window.__ModuleLoader__.load({
 				? Math.max(0, Math.min(100, props.percent))
 				: undefined;
 			const tone = props.loading ? "muted" : (props.included === false ? "muted" : toneOf(percent));
-			const fillClass = "mxu_inline_fill " + (props.loading ? "loading" : tone);
+			const fillClass = "am_inline_fill " + (props.loading ? "loading" : tone);
 			const width = props.loading ? undefined : (props.included === false || percent === undefined ? "0%" : percent + "%");
-			return createElement("span", { className: "mxu_inline_line", "aria-hidden": "true" },
-				createElement("span", { className: "mxu_inline_label" }, props.label),
-				createElement("span", { className: "mxu_inline_track" },
+			return createElement("span", { className: "am_inline_line", "aria-hidden": "true" },
+				createElement("span", { className: "am_inline_label" }, props.label),
+				createElement("span", { className: "am_inline_track" },
 					createElement("span", { className: fillClass, style: width === undefined ? undefined : { width } }),
 				),
 			);
@@ -205,7 +235,7 @@ window.__ModuleLoader__.load({
 
 		function detailMetric(label, percent, included, reset) {
 			const value = included === false ? "未包含" : formatPercent(percent);
-			return createElement("div", { className: "mxu_inline_metric" },
+			return createElement("div", { className: "am_inline_metric" },
 				createElement("span", null, label + (reset ? " · " + reset : "")),
 				createElement("b", null, value),
 			);
@@ -215,41 +245,48 @@ window.__ModuleLoader__.load({
 			const accounts = Array.isArray(props.accounts) ? props.accounts : [];
 			const data = props.data;
 			const loading = !data || data.phase === "init";
-			return createElement("div", { className: "mxu_inline_tip", role: "tooltip", id: props.id },
-				createElement("div", { className: "mxu_inline_tip_head" },
+			const selected = accounts.find((account) => account && account.id === props.accountId);
+			const title = (selected && selected.label) || "订阅用量";
+			const sub = selected ? (ACCOUNT_SHORT[selected.id] || "") : "";
+			return createElement("div", { className: "am_inline_tip", role: "tooltip", id: props.id },
+				createElement("div", { className: "am_inline_tip_head" },
 					createElement("div", null,
-						createElement("div", { className: "mxu_inline_tip_title" }, "MiniMax Token Plan"),
-						createElement("div", { className: "mxu_inline_tip_sub" }, REGION_LABEL[props.region] || "MiniMax"),
+						createElement("div", { className: "am_inline_tip_title" }, title),
+						createElement("div", { className: "am_inline_tip_sub" }, sub),
 					),
-					createElement("span", { className: "mxu_inline_tip_live" },
+					createElement("span", { className: "am_inline_tip_live" },
 						props.busy ? "刷新中…" : (loading ? "读取中…" : (data.fetchedAt ? "更新于 " + formatFetchedAt(data.fetchedAt) : "")),
 					),
 				),
-				data && data.error ? createElement("div", { className: "mxu_inline_tip_error" }, data.error) : null,
+				data && data.error ? createElement("div", { className: "am_inline_tip_error" }, data.error) : null,
 				loading && accounts.length === 0
-					? createElement("div", { className: "mxu_inline_tip_empty" }, props.busy ? "正在刷新用量…" : "正在读取用量…")
+					? createElement("div", { className: "am_inline_tip_empty" }, props.busy ? "正在刷新用量…" : "正在读取用量…")
 					: null,
 				accounts.map((account) => createElement("div", {
-					className: "mxu_inline_account" + (account.region === props.region ? " mxu_inline_account_selected" : ""),
-					key: account.region,
+					className: "am_inline_account" + (account.id === props.accountId ? " am_inline_account_selected" : ""),
+					key: account.id,
 				},
-					createElement("div", { className: "mxu_inline_account_head" },
-						createElement("span", { className: "mxu_inline_chip" }, REGION_LABEL[account.region] || account.region),
-						createElement("span", { className: "mxu_inline_account_name" }, account.planName || "订阅套餐"),
-						account.stale ? createElement("span", { className: "mxu_inline_stale" }, "可能过期") : null,
+					createElement("div", { className: "am_inline_account_head" },
+						createElement("span", { className: "am_inline_chip" }, ACCOUNT_SHORT[account.id] || account.id),
+						createElement("span", { className: "am_inline_account_name" }, account.planName || account.label || "订阅套餐"),
+						account.stale ? createElement("span", { className: "am_inline_stale" }, "可能过期") : null,
 					),
-					account.error ? createElement("div", { className: "mxu_inline_account_error" }, account.error) : null,
-					(account.models || []).map((model) => createElement("div", { className: "mxu_inline_model", key: model.name },
-						createElement("div", { className: "mxu_inline_model_name" }, model.name),
-						detailMetric("5 小时窗口", model.intervalRemainingPercent, model.included, formatCountdown(model.intervalEndAt)),
-						detailMetric("本周窗口", model.weeklyRemainingPercent, model.included, formatCountdown(model.weeklyEndAt)),
+					account.error ? createElement("div", { className: "am_inline_account_error" }, account.error) : null,
+					(Array.isArray(account.entries) ? account.entries : []).map((entry) => createElement("div", { className: "am_inline_model", key: entry.name },
+						createElement("div", { className: "am_inline_model_name" }, entry.name),
+						windowsOf(entry).map((window) => detailMetric(
+							window.title || window.label,
+							window.remainingPercent,
+							entry.included,
+							formatCountdown(window.endAt),
+						)),
 					)),
 				)),
-				createElement("div", { className: "mxu_inline_hint" }, "点击立即刷新 · 仅当前 MiniMax Token Plan provider 显示"),
+				createElement("div", { className: "am_inline_hint" }, "点击立即刷新 · 仅当前订阅 provider 显示"),
 			);
 		}
 
-		function MiniMaxUsageIndicator(props) {
+		function UsageIndicator(props) {
 			const directory = props.directory;
 			const directoryState = react.useSyncExternalStore(
 				(listener) => directory.subscribe(listener),
@@ -257,11 +294,11 @@ window.__ModuleLoader__.load({
 				() => directory.getSnapshot(),
 			);
 			const current = directoryState && directoryState.current;
-			const region = directoryState && directoryState.status === "ready"
-				? minimaxRegion(current && current.provider)
+			const accountId = directoryState && directoryState.status === "ready"
+				? accountOfProvider(current && current.provider)
 				: undefined;
-			const enabled = region !== undefined;
-			const { data, busy, load, tick } = useUsage(enabled, region);
+			const enabled = accountId !== undefined;
+			const { data, busy, load, tick } = useUsage(enabled, accountId);
 			void tick;
 			const [hovered, setHovered] = react.useState(false);
 			const [focused, setFocused] = react.useState(false);
@@ -270,28 +307,32 @@ window.__ModuleLoader__.load({
 			if (!enabled) return null;
 
 			const accounts = data && Array.isArray(data.accounts) ? data.accounts : [];
-			const selected = accountForSelection(accounts, region, current && current.model);
+			const selected = accountForSelection(accounts, accountId, current && current.model);
 			const account = selected.account;
-			const model = selected.model;
+			const entry = selected.entry;
+			const windows = windowsOf(entry);
 			const loading = !data || data.phase === "init";
 			const error = (account && account.error) || (data && data.error);
+			const accountName = (account && account.label) || ACCOUNT_SHORT[accountId] || "订阅用量";
 			const summary = loading
-				? "MiniMax Token Plan 用量读取中"
-				: error && !model
-					? "MiniMax Token Plan 用量异常：" + error
-					: "MiniMax " + (REGION_LABEL[region] || "") + "：5h 剩余 " + formatPercent(model && model.intervalRemainingPercent) + "，7d 剩余 " + formatPercent(model && model.weeklyRemainingPercent) + "；点击刷新";
+				? accountName + " 用量读取中"
+				: error && windows.length === 0
+					? accountName + " 用量异常：" + error
+					: accountName + "：" + windows.map((window) =>
+						(window.title || window.label) + "剩余 " + formatPercent(window.remainingPercent)
+					).join("，") + "；点击刷新";
 			const showTooltip = hovered || focused;
 			return createElement("span", {
-				className: "mxu_inline_host",
-				"data-minimax-usage": "true",
-				"data-minimax-usage-provider": current && current.provider,
-				"data-minimax-usage-region": region,
+				className: "am_inline_host",
+				"data-dsh-ammeter": "true",
+				"data-dsh-ammeter-provider": current && current.provider,
+				"data-dsh-ammeter-account": accountId,
 				onMouseEnter: () => setHovered(true),
 				onMouseLeave: () => setHovered(false),
 			},
 				createElement("button", {
 					type: "button",
-					className: "mxu_inline",
+					className: "am_inline",
 					"aria-label": summary,
 					"aria-busy": busy || loading ? "true" : "false",
 					"aria-describedby": showTooltip ? tooltipId : undefined,
@@ -301,19 +342,17 @@ window.__ModuleLoader__.load({
 					onFocus: () => setFocused(true),
 					onBlur: () => setFocused(false),
 				},
-					createElement("span", { className: "mxu_inline_rows" },
-						createElement(CompactQuotaLine, {
-							label: "5h",
-							percent: model && model.intervalRemainingPercent,
-							included: model && model.included,
+					createElement("span", { className: "am_inline_rows" },
+						(windows.length > 0 ? windows.slice(0, 3) : [
+							{ key: "placeholder-1", label: "", remainingPercent: undefined },
+							{ key: "placeholder-2", label: "", remainingPercent: undefined },
+						]).map((window) => createElement(CompactQuotaLine, {
+							key: window.key,
+							label: window.label,
+							percent: window.remainingPercent,
+							included: entry && entry.included,
 							loading,
-						}),
-						createElement(CompactQuotaLine, {
-							label: "7d",
-							percent: model && model.weeklyRemainingPercent,
-							included: model && model.included,
-							loading,
-						}),
+						})),
 					),
 				),
 				showTooltip ? createElement(DetailPanel, {
@@ -321,7 +360,7 @@ window.__ModuleLoader__.load({
 					data,
 					accounts,
 					busy,
-					region,
+					accountId,
 				}) : null,
 			);
 		}
@@ -332,13 +371,13 @@ window.__ModuleLoader__.load({
 				if (!scope || !scope.slots || !scope.modelDirectories) return;
 				scope.slots.inject("conversation.input.right", () => scope.slots.register({
 					name: "conversation.input.right",
-					id: "minimax-usage",
+					id: "ammeter",
 					order: 30,
-					label: "MiniMax",
+					label: "订阅用量",
 					inject: (sessionId) => ({
 						directory: scope.modelDirectories.directoryFor(sessionId).store,
 					}),
-				}, MiniMaxUsageIndicator));
+				}, UsageIndicator));
 			});
 		}
 

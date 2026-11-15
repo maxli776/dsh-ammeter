@@ -1,27 +1,53 @@
-import type { AccountSnapshot, Region, UsageModel } from "./types.js";
-
-const AUTH_HINT =
-  "Key 无效或不是订阅 Key。Token Plan 用量查询必须使用订阅 Key，不能使用普通按量付费 API Key。";
+import type { AccountSpec } from "./accounts.js";
+import type { AccountSnapshot, UsageEntry, UsageWindow, WindowKey } from "./types.js";
 
 export function isAuthFailureMessage(message: string): boolean {
-  return /cookie is missing|log in again|unauthorized|invalid api key|invalid token|status_code["\s:]*1004|1004/i.test(
+  return /cookie is missing|log in again|unauthorized|invalid api key|invalid token|status_code["\\s:]*1004|1004/i.test(
     message,
   );
 }
 
-export function mapHttpError(status: number, body: unknown): string {
+export function mapHttpError(status: number, body: unknown, spec: AccountSpec): string {
   const msg = statusMessageOf(body);
-  if (status === 401 || status === 403 || (msg !== undefined && isAuthFailureMessage(msg))) {
-    return AUTH_HINT;
-  }
+  if (status === 401) return spec.invalidKeyMessage;
+  if (status === 403) return spec.noPlanMessage;
+  if (msg !== undefined && isAuthFailureMessage(msg)) return spec.invalidKeyMessage;
   if (msg !== undefined && msg.length > 0) return msg;
   return `查询失败 (HTTP ${status})`;
 }
 
-export function normalizeRemainsPayload(payload: unknown, region: Region, now = Date.now()): AccountSnapshot {
+/** Normalize one vendor payload into the plugin's account shape. */
+export function normalizeAccountPayload(
+  payload: unknown,
+  spec: AccountSpec,
+  now = Date.now(),
+): AccountSnapshot {
+  switch (spec.id) {
+    case "opencode-go":
+      return normalizeOpenCodeGoPayload(payload, spec);
+    case "glm":
+      return normalizeGlmQuotaPayload(payload, spec);
+    default:
+      return normalizeRemainsPayload(payload, spec, now);
+  }
+}
+
+/* -------------------------------------------------------------------------- */
+/* MiniMax — GET /v1/token_plan/remains                                       */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * MiniMax answers with one row per model, each row carrying a 5h and a weekly
+ * window. The rows become the account's entries.
+ */
+export function normalizeRemainsPayload(
+  payload: unknown,
+  spec: AccountSpec,
+  now = Date.now(),
+): AccountSnapshot {
   const root = asRecord(payload);
   if (root === undefined) {
-    return fail(region, "无法解析用量数据");
+    return fail(spec, "无法解析用量数据");
   }
 
   const base = asRecord(root.base_resp);
@@ -29,43 +55,34 @@ export function normalizeRemainsPayload(payload: unknown, region: Region, now = 
   const statusMsg = asString(base?.status_msg);
   if (statusCode !== undefined && statusCode !== 0) {
     const raw = statusMsg ?? `MiniMax 返回错误 (${statusCode})`;
-    return fail(region, isAuthFailureMessage(raw) || statusCode === 1004 ? AUTH_HINT : raw);
+    return fail(spec, isAuthFailureMessage(raw) || statusCode === 1004 ? spec.invalidKeyMessage : raw);
   }
 
   const rows = modelRowsOf(root);
   if (rows === undefined) {
-    return fail(region, "无模型配额数据");
+    return fail(spec, "无模型配额数据");
   }
 
-  const models: UsageModel[] = [];
+  const entries: UsageEntry[] = [];
   for (const row of rows) {
-    const model = normalizeModel(row, now);
-    if (model !== undefined) models.push(model);
+    const entry = normalizeModelRow(row, now);
+    if (entry !== undefined) entries.push(entry);
   }
-  if (models.length === 0) {
-    return fail(region, "无模型配额数据");
+  if (entries.length === 0) {
+    return fail(spec, "无模型配额数据");
   }
 
   return {
-    region,
+    id: spec.id,
+    label: spec.label,
     configured: true,
     ok: true,
     planName: planNameOf(root, rows),
-    models,
+    entries,
   };
 }
 
-function fail(region: Region, error: string): AccountSnapshot {
-  return {
-    region,
-    configured: true,
-    ok: false,
-    error,
-    models: [],
-  };
-}
-
-function normalizeModel(row: Record<string, unknown>, now: number): UsageModel | undefined {
+function normalizeModelRow(row: Record<string, unknown>, now: number): UsageEntry | undefined {
   const name = asString(row.model_name) ?? asString(row.name) ?? asString(row.model);
   if (name === undefined || name.length === 0) return undefined;
 
@@ -78,12 +95,22 @@ function normalizeModel(row: Record<string, unknown>, now: number): UsageModel |
   return {
     name,
     included,
-    ...optionalNumber("intervalRemainingPercent", intervalRemainingPercent),
-    ...optionalNumber("weeklyRemainingPercent", weeklyRemainingPercent),
-    ...optionalNumber("remainsTimeMs", remainsTimeMs),
-    ...optionalNumber("weeklyRemainsTimeMs", weeklyRemainsTimeMs),
-    ...optionalNumber("intervalEndAt", endAt(row, "interval", now, remainsTimeMs)),
-    ...optionalNumber("weeklyEndAt", endAt(row, "weekly", now, weeklyRemainsTimeMs)),
+    windows: [
+      {
+        key: "interval",
+        label: "5h",
+        title: "5 小时窗口",
+        ...optionalNumber("remainingPercent", intervalRemainingPercent),
+        ...optionalNumber("endAt", endAt(row, "interval", now, remainsTimeMs)),
+      },
+      {
+        key: "weekly",
+        label: "7d",
+        title: "本周窗口",
+        ...optionalNumber("remainingPercent", weeklyRemainingPercent),
+        ...optionalNumber("endAt", endAt(row, "weekly", now, weeklyRemainsTimeMs)),
+      },
+    ],
   };
 }
 
@@ -188,11 +215,201 @@ function modelRowsOf(root: Record<string, unknown>): Record<string, unknown>[] |
   return rows;
 }
 
+/* -------------------------------------------------------------------------- */
+/* OpenCode Go — GET /zen/go/v1/usage                                          */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * OpenCode Go answers with three account-level windows: the rolling 5h
+ * window, the weekly one and the monthly one. `percent` is the share of that
+ * window already spent, so the plugin reports the remaining share.
+ */
+export function normalizeOpenCodeGoPayload(payload: unknown, spec: AccountSpec): AccountSnapshot {
+  const root = asRecord(payload);
+  if (root === undefined) return fail(spec, "无法解析用量数据");
+
+  const usage = asRecord(root.usage) ?? root;
+  const windows: UsageWindow[] = [];
+  addOpenCodeWindow(windows, "interval", "5h", "5 小时窗口", firstRecord(usage, ["rolling", "fiveHour", "5h", "session"]));
+  addOpenCodeWindow(windows, "weekly", "7d", "本周窗口", firstRecord(usage, ["weekly", "week"]));
+  addOpenCodeWindow(windows, "monthly", "月", "本月窗口", firstRecord(usage, ["monthly", "month"]));
+
+  if (windows.length === 0) return fail(spec, "用量接口返回结构不符合预期");
+
+  return {
+    id: spec.id,
+    label: spec.label,
+    configured: true,
+    ok: true,
+    entries: [{ name: "账户额度", included: true, windows }],
+  };
+}
+
+function addOpenCodeWindow(
+  windows: UsageWindow[],
+  key: WindowKey,
+  label: string,
+  title: string,
+  record: Record<string, unknown> | undefined,
+): void {
+  if (record === undefined) return;
+  const remaining = asNumber(record.remainingPercent) ?? asNumber(record.remaining_percent);
+  const used = asNumber(record.percent) ?? asNumber(record.usedPercent) ?? asNumber(record.used_percent);
+  const remainingPercent =
+    remaining !== undefined
+      ? clamp(remaining, 0, 100)
+      : used !== undefined
+        ? clamp(100 - used, 0, 100)
+        : undefined;
+  const endAt = parseTimestamp(
+    firstDefined(record.resetsAt, record.resets_at, record.resetAt, record.reset_at),
+  );
+  windows.push({
+    key,
+    label,
+    title,
+    ...optionalNumber("remainingPercent", remainingPercent),
+    ...optionalNumber("endAt", endAt),
+  });
+}
+
+/* -------------------------------------------------------------------------- */
+/* GLM — GET /api/monitor/usage/quota/limit                                    */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * Z.ai answers with a list of limits whose `unit` names the window — never
+ * the array position: unit 3 is the rolling 5h window, unit 6 the multi-day
+ * window, and a TIME_LIMIT entry the monthly tool allowance. `percentage` is
+ * the share already spent.
+ */
+export function normalizeGlmQuotaPayload(payload: unknown, spec: AccountSpec): AccountSnapshot {
+  const root = asRecord(payload);
+  if (root === undefined) return fail(spec, "无法解析用量数据");
+  if (root.success === false) return fail(spec, spec.noPlanMessage);
+
+  const data = asRecord(root.data);
+  if (data === undefined) return fail(spec, "无法解析用量数据");
+  const limits = asArray(data.limits);
+  if (limits === undefined) return fail(spec, "无可用配额数据");
+
+  const windows: UsageWindow[] = [];
+  for (const item of limits) {
+    const entry = asRecord(item);
+    if (entry === undefined) continue;
+    const type = (asString(entry.type) ?? "").toUpperCase();
+    const unit = asNumber(entry.unit);
+    const isTokenLimit = type === "TOKENS_LIMIT" || type === "CREDIT_LIMIT";
+    if (isTokenLimit && unit === 3) {
+      addGlmWindow(windows, "interval", "5h", "5 小时窗口", entry);
+    } else if (isTokenLimit && unit === 6) {
+      addGlmWindow(windows, "weekly", "7d", "多日窗口", entry);
+    } else if (type === "TIME_LIMIT") {
+      addGlmWindow(windows, "monthly", "月", "本月工具额度", entry);
+    }
+  }
+  if (windows.length === 0) return fail(spec, "无可用配额数据");
+
+  const level = asString(data.level);
+  return {
+    id: spec.id,
+    label: spec.label,
+    configured: true,
+    ok: true,
+    planName: level === undefined ? undefined : `GLM Coding Plan · ${capitalize(level)}`,
+    entries: [{ name: "套餐额度", included: true, windows }],
+  };
+}
+
+function addGlmWindow(
+  windows: UsageWindow[],
+  key: WindowKey,
+  label: string,
+  title: string,
+  entry: Record<string, unknown>,
+): void {
+  let used = asNumber(entry.percentage);
+  if (used === undefined) {
+    const current = asNumber(entry.currentValue);
+    const limit = asNumber(entry.usage);
+    if (current !== undefined && limit !== undefined && limit > 0) used = (current / limit) * 100;
+  }
+  if (used !== undefined && (used < 0 || used > 100)) used = undefined;
+  const remainingPercent = used === undefined ? undefined : clamp(100 - used, 0, 100);
+  const endAt = parseTimestamp(firstDefined(entry.nextResetTime, entry.next_reset_time));
+
+  const window: UsageWindow = {
+    key,
+    label,
+    title,
+    ...optionalNumber("remainingPercent", remainingPercent),
+    ...optionalNumber("endAt", endAt),
+  };
+  const at = windows.findIndex((item) => item.key === key);
+  if (at >= 0) windows[at] = window;
+  else windows.push(window);
+}
+
+/* -------------------------------------------------------------------------- */
+/* Shared helpers                                                              */
+/* -------------------------------------------------------------------------- */
+
+function fail(spec: AccountSpec, error: string): AccountSnapshot {
+  return {
+    id: spec.id,
+    label: spec.label,
+    configured: true,
+    ok: false,
+    error,
+    entries: [],
+  };
+}
+
 function statusMessageOf(body: unknown): string | undefined {
   const rec = asRecord(body);
   if (rec === undefined) return undefined;
   const base = asRecord(rec.base_resp);
-  return asString(base?.status_msg) ?? asString(rec.message) ?? asString(rec.error);
+  const error = asRecord(rec.error);
+  return (
+    asString(base?.status_msg) ??
+    asString(rec.message) ??
+    asString(rec.msg) ??
+    asString(error?.message) ??
+    asString(rec.error)
+  );
+}
+
+function firstRecord(
+  source: Record<string, unknown>,
+  keys: readonly string[],
+): Record<string, unknown> | undefined {
+  for (const key of keys) {
+    const record = asRecord(source[key]);
+    if (record !== undefined) return record;
+  }
+  return undefined;
+}
+
+/** First value that is neither undefined nor null. */
+function firstDefined(...values: unknown[]): unknown {
+  for (const value of values) {
+    if (value !== undefined && value !== null) return value;
+  }
+  return undefined;
+}
+
+/** Epoch ms, epoch seconds and ISO-8601 all end up as epoch ms. */
+function parseTimestamp(value: unknown): number | undefined {
+  const numeric = asNumber(value);
+  if (numeric !== undefined) {
+    if (numeric <= 0) return undefined;
+    return numeric > 1e12 ? numeric : numeric * 1000;
+  }
+  if (typeof value === "string" && value.trim().length > 0) {
+    const parsed = Date.parse(value);
+    if (Number.isFinite(parsed)) return parsed;
+  }
+  return undefined;
 }
 
 function normalizeEpochMs(value: number | undefined): number | undefined {
@@ -216,6 +433,10 @@ function optionalNumber<K extends string>(key: K, value: number | undefined): Pa
 
 function clamp(value: number, min: number, max: number): number {
   return Math.min(max, Math.max(min, value));
+}
+
+function capitalize(value: string): string {
+  return value.length === 0 ? value : value[0]!.toUpperCase() + value.slice(1);
 }
 
 function asRecord(value: unknown): Record<string, unknown> | undefined {

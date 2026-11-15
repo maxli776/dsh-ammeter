@@ -5,6 +5,34 @@
 
 ## [Unreleased]
 
+## [1.0.0] - 2026-11-15
+
+### Changed
+
+- 插件更名为 **dsh-ammeter**（原 `dsh-minimax-usage`）：包名、Cordis entry id、客户端模块 id、浏览器路由（`/minimax-usage/api/*` → `/dsh-ammeter/api/*`）、CSS 类前缀与 `data-*` 属性全部更名；CI 里 `allowBuilds` 的键也随之变化，旧的安装需要卸载后重装
+- 插件身份不再与任何单一厂商绑定；MiniMax 相关的凭据名、provider id 与接口地址作为**厂商支持项**保留
+
+### Added
+
+- 同时支持 OpenCode Go 与 GLM（智谱 GLM 编程套餐）订阅：用量条按当前 provider 自动切到对应订阅
+- OpenCode Go 用量接口 `GET https://opencode.ai/zen/go/v1/usage`，展示 5 小时 / 本周 / 本月三个账户级窗口
+- GLM 用量接口 `GET https://api.z.ai/api/monitor/usage/quota/limit`（国内站回退 `open.bigmodel.cn`），按 `unit` 识别 5 小时 / 多日 / 本月工具额度三个窗口
+- 凭据支持 `OPENCODE_GO_API_KEY`（或 `OPENCODE_API_KEY`）与 `GLM_API_KEY` / `ZAI_API_KEY` / `Z_AI_API_KEY`
+- provider 映射：`opencode-go` → OpenCode Go；`zai` / `zai-coding-plan` / `zai-coding-cn` / `glm` 等 → GLM
+- 两个本机校验脚本：`scripts/live-check.mjs`（真跑各家用量接口）与 `scripts/smoke-host.mjs`（Host 半边启动冒烟）
+
+### Fixed
+
+- `prepare` 脚本不再依赖 `npm` 可执行文件（改为直接调 `tsc`），在没有 npm 的环境里安装不再中断
+- vitest 改用 `threads` 池，在禁止进程派生的环境里也能跑测试
+
+### Internal
+
+- 内部数据模型由「区域」改为「账号 + 窗口」：MiniMax 的每模型行与其它订阅的账户级窗口统一成同一种 `windows` 结构
+- 刷新调度改为按账号记账：任一被跟踪的订阅被实际使用时，都会进入 30 秒刷新循环与 5 小时窗口重置后刷新
+- 悬停详情浮层按账号分卡片展示，当前 provider 对应的卡片高亮；MiniMax 之外的订阅展开为 3 行窗口
+- OpenCode Go 请求带上自报身份的 User-Agent 且不跟随重定向；GLM 的全球站与国内站接口在 Key 被拒时也会依次尝试
+
 ## [0.1.8] - 2026-09-05
 
 ### Changed

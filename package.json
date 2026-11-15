@@ -1,7 +1,7 @@
 {
-  "name": "dsh-minimax-usage",
-  "version": "0.1.8",
-  "description": "Show MiniMax Token Plan subscription usage in the DSH Web UI",
+  "name": "dsh-ammeter",
+  "version": "1.0.0",
+  "description": "Subscription quota ammeter for the DSH Web UI — MiniMax Token Plan, OpenCode Go and GLM, on one compact bar",
   "type": "module",
   "files": [
     "dist/",
@@ -26,7 +26,7 @@
     "dev": "tsc --watch",
     "test": "vitest run",
     "test:watch": "vitest",
-    "prepare": "npm run build",
+    "prepare": "tsc -p tsconfig.json && node scripts/copy-client.mjs",
     "prepublishOnly": "npm run build && npm test"
   },
   "devDependencies": {
@@ -54,11 +54,19 @@
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/pan17/dsh-minimax-usage.git"
+    "url": "git+https://github.com/maxli776/dsh-minimax-usage.git"
   },
   "keywords": [
+    "ammeter",
+    "quota",
+    "usage",
+    "subscription",
     "minimax",
     "token-plan",
+    "opencode",
+    "opencode-go",
+    "glm",
+    "zai",
     "dsh",
     "deepseek-harness",
     "cordis"

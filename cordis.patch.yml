@@ -1,4 +1,4 @@
-# dsh bundle layer: mount the MiniMax Token Plan usage plugin.
+# dsh bundle layer: mount the subscription quota ammeter.
 - insert:
-    - id: dsh-minimax-usage
-      name: 'dsh-minimax-usage'
+    - id: dsh-ammeter
+      name: 'dsh-ammeter'

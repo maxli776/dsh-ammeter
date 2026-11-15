@@ -1,29 +1,38 @@
-import { CN_KEY_REF, GLOBAL_KEY_REF, type CredentialsLike, type Region } from "./types.js";
+import { ACCOUNTS, type AccountSpec } from "./accounts.js";
+import type { AccountId, CredentialsLike } from "./types.js";
 
-export interface ResolvedKeys {
-  cn?: string;
-  global?: string;
-}
+/** Resolved key per account. Absent means "not configured". */
+export type ResolvedKeys = Partial<Record<AccountId, string>>;
 
 export async function resolveKeys(
   credentials: CredentialsLike | undefined,
   env: NodeJS.ProcessEnv = process.env,
 ): Promise<ResolvedKeys> {
-  const [globalKey, cnKey] = await Promise.all([
-    resolveOne(credentials, env, GLOBAL_KEY_REF),
-    resolveOne(credentials, env, CN_KEY_REF),
-  ]);
+  const resolved = await Promise.all(
+    ACCOUNTS.map(async (spec) => [spec.id, await resolveAccountKey(credentials, env, spec)] as const),
+  );
   const out: ResolvedKeys = {};
-  if (globalKey !== undefined) out.global = globalKey;
-  if (cnKey !== undefined) out.cn = cnKey;
+  for (const [id, value] of resolved) {
+    if (value !== undefined) out[id] = value;
+  }
   return out;
 }
 
-export function configuredRegions(keys: ResolvedKeys): Region[] {
-  const regions: Region[] = [];
-  if (keys.global !== undefined) regions.push("global");
-  if (keys.cn !== undefined) regions.push("cn");
-  return regions;
+/** The accounts that have a key, in registry order. */
+export function configuredAccounts(keys: ResolvedKeys): AccountId[] {
+  return ACCOUNTS.filter((spec) => keys[spec.id] !== undefined).map((spec) => spec.id);
+}
+
+async function resolveAccountKey(
+  credentials: CredentialsLike | undefined,
+  env: NodeJS.ProcessEnv,
+  spec: AccountSpec,
+): Promise<string | undefined> {
+  for (const ref of spec.credentialRefs) {
+    const value = await resolveOne(credentials, env, ref);
+    if (value !== undefined) return value;
+  }
+  return undefined;
 }
 
 async function resolveOne(

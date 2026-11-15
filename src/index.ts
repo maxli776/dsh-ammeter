@@ -1,17 +1,29 @@
 /**
- * dsh-minimax-usage — MiniMax Token Plan usage in the DSH Web UI.
+ * dsh-ammeter — subscription usage in the DSH Web UI.
+ *
+ * Tracks the quota of every subscription this install has a key for (MiniMax
+ * Token Plan, OpenCode Go, GLM coding plan) and shows the one that belongs to
+ * the currently selected provider.
  *
  * Cordis host plugin entry. Loaded through the package's cordis.patch.yml
  * bundle layer. Zero runtime dependencies on `@deepseek-ai/*`: DSH services
  * are read through `ctx.get(...)` / `ctx.inject(...)`.
  */
 
-import { CN_KEY_REF, GLOBAL_KEY_REF, type UsageSnapshot } from "./types.js";
-import { regionOfProvider, RefreshScheduler } from "./refresh.js";
+import { accountOfCredentialRef, accountOfProvider } from "./accounts.js";
+import type { UsageSnapshot } from "./types.js";
+import { RefreshScheduler } from "./refresh.js";
 import { UsageService } from "./service.js";
 
-export const name = "dsh-minimax-usage";
+export const name = "dsh-ammeter";
 export const inject: string[] = [];
+
+/**
+ * Browser-facing route prefix. `src/client.js` is served as a standalone
+ * module bundle and cannot import this constant, so it carries the same
+ * literal — keep the two in sync.
+ */
+export const API_BASE = "/dsh-ammeter/api";
 
 export function apply(ctx: unknown): () => void {
   const context = ctx as {
@@ -45,13 +57,13 @@ export function apply(ctx: unknown): () => void {
       const provider = optionsObject?.provider;
       const sessionId =
         typeof optionsObject?.sessionId === "string" ? optionsObject.sessionId : undefined;
-      const region = regionOfProvider(provider);
+      const account = accountOfProvider(provider);
       const auxiliary =
         optionsObject?.purpose === "compaction" || optionsObject?.purpose === "session-title";
       if (auxiliary) {
-        if (region !== undefined) scheduler.markDirty(region);
+        if (account !== undefined) scheduler.markDirty(account);
       } else {
-        scheduler.observeProvider(region, sessionId);
+        scheduler.observeProvider(account, sessionId);
       }
       const nxt = next as () => unknown;
       return nxt();
@@ -67,7 +79,7 @@ export function apply(ctx: unknown): () => void {
       else if (status === "idle") scheduler.onIdle(agentId);
     });
     context.on("credentials/reference-updated", (ref) => {
-      if (ref !== GLOBAL_KEY_REF && ref !== CN_KEY_REF) return;
+      if (accountOfCredentialRef(ref) === undefined) return;
       void scheduler.refreshNow("credential");
     });
   }
@@ -84,28 +96,28 @@ export function apply(ctx: unknown): () => void {
         }): unknown;
       }>("webServer");
       if (!webServer) {
-        console.warn("[dsh-minimax-usage] webServer unavailable; Web UI disabled");
+        console.warn("[dsh-ammeter] webServer unavailable; Web UI disabled");
         return;
       }
 
       webServer.register({
         kind: "exact",
-        path: "/minimax-usage/api/status",
+        path: `${API_BASE}/status`,
         handler: (req, res) => {
           void handleStatus(req, res, service, scheduler, false);
         },
       });
       webServer.register({
         kind: "exact",
-        path: "/minimax-usage/api/refresh",
+        path: `${API_BASE}/refresh`,
         handler: (req, res) => {
           void handleStatus(req, res, service, scheduler, true);
         },
       });
-      console.log("[dsh-minimax-usage] floating usage bubble available on the Web UI");
+      console.log("[dsh-ammeter] floating usage bubble available on the Web UI");
     });
   } else {
-    console.warn("[dsh-minimax-usage] ctx.inject unavailable; Web UI disabled");
+    console.warn("[dsh-ammeter] ctx.inject unavailable; Web UI disabled");
   }
 
   return () => {

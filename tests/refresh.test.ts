@@ -5,13 +5,13 @@ import {
   IDLE_DELAY_MS,
   RUNNING_REFRESH_INTERVAL_MS,
   RESET_REFRESH_DELAY_MS,
+  accountIdOfProvider,
   computeResetFireAt,
   nextHeartbeatMs,
   RefreshScheduler,
-  regionOfProvider,
   type Clock,
 } from "../src/refresh.js";
-import type { AccountSnapshot, RefreshReason, UsageSnapshot } from "../src/types.js";
+import type { AccountId, AccountSnapshot, RefreshReason, UsageSnapshot } from "../src/types.js";
 
 class FakeClock implements Clock {
   nowMs = 0;
@@ -48,11 +48,14 @@ class FakeClock implements Clock {
   }
 }
 
-describe("regionOfProvider", () => {
-  it("maps only MiniMax routes", () => {
-    expect(regionOfProvider("minimax")).toBe("global");
-    expect(regionOfProvider("minimax-cn")).toBe("cn");
-    expect(regionOfProvider("grok")).toBeUndefined();
+describe("accountIdOfProvider", () => {
+  it("maps the tracked subscription providers", () => {
+    expect(accountIdOfProvider("minimax")).toBe("minimax-global");
+    expect(accountIdOfProvider("minimax-cn")).toBe("minimax-cn");
+    expect(accountIdOfProvider("opencode-go")).toBe("opencode-go");
+    expect(accountIdOfProvider("zai")).toBe("glm");
+    expect(accountIdOfProvider("zai-coding-cn")).toBe("glm");
+    expect(accountIdOfProvider("grok")).toBeUndefined();
   });
 });
 
@@ -79,7 +82,7 @@ describe("RefreshScheduler", () => {
     scheduler.dispose();
   });
 
-  it("waits 15s after MiniMax idle before prefetching and resets heartbeat", async () => {
+  it("waits 15s after a tracked idle before prefetching and resets heartbeat", async () => {
     const reasons: RefreshReason[] = [];
     const clock = new FakeClock();
     const scheduler = new RefreshScheduler({
@@ -88,14 +91,14 @@ describe("RefreshScheduler", () => {
       },
     }, clock);
     scheduler.heartbeatMs = 8 * 60 * 1000;
-    scheduler.markDirty("cn");
+    scheduler.markDirty("minimax-cn");
     scheduler.onIdle();
     await clock.advance(IDLE_DELAY_MS - 1);
     expect(reasons).toEqual([]);
     await clock.advance(1);
     expect(reasons).toEqual(["turn-idle"]);
     expect(scheduler.heartbeatMs).toBe(HEARTBEAT_MIN_MS);
-    expect(scheduler.dirtyRegions).toEqual([]);
+    expect(scheduler.dirtyAccounts).toEqual([]);
     scheduler.dispose();
   });
 
@@ -107,7 +110,7 @@ describe("RefreshScheduler", () => {
         reasons.push(reason);
       },
     }, clock);
-    scheduler.markDirty("global");
+    scheduler.markDirty("minimax-global");
     scheduler.onIdle();
     scheduler.onRunning();
     await clock.advance(IDLE_DELAY_MS + 50);
@@ -115,7 +118,7 @@ describe("RefreshScheduler", () => {
     scheduler.dispose();
   });
 
-  it("refreshes every 30 seconds only after a running MiniMax request", async () => {
+  it("refreshes every 30 seconds only after a running tracked request", async () => {
     const reasons: RefreshReason[] = [];
     const clock = new FakeClock();
     const scheduler = new RefreshScheduler({
@@ -128,13 +131,29 @@ describe("RefreshScheduler", () => {
     await clock.advance(HEARTBEAT_MIN_MS);
     expect(reasons).toEqual([]);
 
-    scheduler.observeProvider("global");
+    scheduler.observeProvider("minimax-global");
     await clock.advance(RUNNING_REFRESH_INTERVAL_MS - 1);
     expect(reasons).toEqual([]);
     await clock.advance(1);
     expect(reasons).toEqual(["running"]);
     await clock.advance(RUNNING_REFRESH_INTERVAL_MS * 2);
     expect(reasons).toEqual(["running", "running", "running"]);
+    scheduler.dispose();
+  });
+
+  it("refreshes every 30 seconds for OpenCode Go too", async () => {
+    const reasons: RefreshReason[] = [];
+    const clock = new FakeClock();
+    const scheduler = new RefreshScheduler({
+      snapshot: async (_force, reason) => {
+        reasons.push(reason);
+      },
+    }, clock);
+
+    scheduler.onRunning();
+    scheduler.observeProvider("opencode-go");
+    await clock.advance(RUNNING_REFRESH_INTERVAL_MS);
+    expect(reasons).toEqual(["running"]);
     scheduler.dispose();
   });
 
@@ -148,13 +167,13 @@ describe("RefreshScheduler", () => {
     }, clock);
 
     scheduler.onRunning("agent-1");
-    scheduler.observeProvider("global");
+    scheduler.observeProvider("minimax-global");
     await clock.advance(RUNNING_REFRESH_INTERVAL_MS);
     expect(reasons).toEqual(["running"]);
     scheduler.dispose();
   });
 
-  it("keeps another Agent's MiniMax refresh alive when a second Agent is non-MiniMax", async () => {
+  it("keeps another Agent's refresh alive when a second Agent uses an untracked provider", async () => {
     const reasons: RefreshReason[] = [];
     const clock = new FakeClock();
     const scheduler = new RefreshScheduler({
@@ -165,14 +184,14 @@ describe("RefreshScheduler", () => {
 
     scheduler.onRunning("minimax-agent");
     scheduler.onRunning("other-agent");
-    scheduler.observeProvider("cn", "minimax-agent");
+    scheduler.observeProvider("minimax-cn", "minimax-agent");
     scheduler.observeProvider(undefined, "other-agent");
     await clock.advance(RUNNING_REFRESH_INTERVAL_MS);
     expect(reasons).toEqual(["running"]);
     scheduler.dispose();
   });
 
-  it("stops the running refresh when the provider changes away from MiniMax", async () => {
+  it("stops the running refresh when the provider changes away from a tracked one", async () => {
     const reasons: RefreshReason[] = [];
     const clock = new FakeClock();
     const scheduler = new RefreshScheduler({
@@ -182,7 +201,7 @@ describe("RefreshScheduler", () => {
     }, clock);
 
     scheduler.onRunning();
-    scheduler.observeProvider("cn");
+    scheduler.observeProvider("minimax-cn");
     await clock.advance(RUNNING_REFRESH_INTERVAL_MS);
     expect(reasons).toEqual(["running"]);
 
@@ -202,7 +221,7 @@ describe("RefreshScheduler", () => {
     }, clock);
 
     scheduler.onRunning();
-    scheduler.observeProvider("global");
+    scheduler.observeProvider("minimax-global");
     await clock.advance(RUNNING_REFRESH_INTERVAL_MS);
     expect(reasons).toEqual(["running"]);
 
@@ -240,18 +259,16 @@ describe("RefreshScheduler", () => {
   });
 });
 
-function okAccount(
-  region: AccountSnapshot["region"],
-  endAts: Array<number | undefined>,
-): AccountSnapshot {
+function okAccount(id: AccountId, endAts: Array<number | undefined>): AccountSnapshot {
   return {
-    region,
+    id,
+    label: id,
     configured: true,
     ok: true,
-    models: endAts.map((intervalEndAt, idx) => ({
-      name: `${region}-${idx}`,
+    entries: endAts.map((endAt, idx) => ({
+      name: `${id}-${idx}`,
       included: true,
-      ...(intervalEndAt === undefined ? {} : { intervalEndAt }),
+      windows: [{ key: "interval" as const, label: "5h", title: "5 小时窗口", ...(endAt === undefined ? {} : { endAt }) }],
     })),
   };
 }
@@ -263,8 +280,8 @@ function snapOf(accounts: AccountSnapshot[]): UsageSnapshot {
 describe("computeResetFireAt", () => {
   it("returns the earliest intervalEndAt + 30s across accounts/models", () => {
     const snap = snapOf([
-      okAccount("global", [10_000]),
-      okAccount("cn", [5_000, 8_000]),
+      okAccount("minimax-global", [10_000]),
+      okAccount("minimax-cn", [5_000, 8_000]),
     ]);
     expect(computeResetFireAt(snap, 0)).toBe(5_000 + RESET_REFRESH_DELAY_MS);
   });
@@ -278,29 +295,25 @@ describe("computeResetFireAt", () => {
   });
 
   it("returns undefined when no model exposes intervalEndAt", () => {
-    const snap = snapOf([okAccount("global", [undefined])]);
-    expect(computeResetFireAt(snap, 0)).toBeUndefined();
+    expect(computeResetFireAt(snapOf([okAccount("minimax-global", [undefined])]), 0)).toBeUndefined();
   });
 
   it("returns undefined when fireAt is already in the past", () => {
-    const snap = snapOf([okAccount("global", [100])]);
-    expect(computeResetFireAt(snap, 100 + RESET_REFRESH_DELAY_MS + 1)).toBeUndefined();
+    expect(computeResetFireAt(snapOf([okAccount("minimax-global", [100])]), 100 + RESET_REFRESH_DELAY_MS + 1)).toBeUndefined();
   });
 
   it("returns the fireAt exactly at the boundary", () => {
-    const snap = snapOf([okAccount("global", [1_000])]);
-    const fireAt = 1_000 + RESET_REFRESH_DELAY_MS;
-    expect(computeResetFireAt(snap, fireAt)).toBeUndefined();
-    expect(computeResetFireAt(snap, fireAt + 1)).toBeUndefined();
-    expect(computeResetFireAt(snap, fireAt - 1)).toBe(fireAt);
+    expect(computeResetFireAt(snapOf([okAccount("minimax-global", [1_000])]), 1_000 + RESET_REFRESH_DELAY_MS)).toBeUndefined();
+    expect(computeResetFireAt(snapOf([okAccount("minimax-global", [1_000])]), 1_000 + RESET_REFRESH_DELAY_MS + 1)).toBeUndefined();
+    expect(computeResetFireAt(snapOf([okAccount("minimax-global", [1_000])]), 1_000 + RESET_REFRESH_DELAY_MS - 1)).toBe(1_000 + RESET_REFRESH_DELAY_MS);
   });
 
   it("skips accounts with ok=false", () => {
     const snap: UsageSnapshot = {
       fetchedAt: 0,
       accounts: [
-        { region: "global", configured: true, ok: false, models: [] },
-        okAccount("cn", [2_000]),
+        { id: "minimax-global", label: "x", configured: true, ok: false, entries: [] },
+        okAccount("minimax-cn", [2_000]),
       ],
     };
     expect(computeResetFireAt(snap, 0)).toBe(2_000 + RESET_REFRESH_DELAY_MS);
@@ -314,7 +327,7 @@ describe("RefreshScheduler reset-refresh", () => {
    * the moment of the fetch (not to the test's t=0).
    */
   function snapAtOffset(clock: FakeClock, offsetMs: number): UsageSnapshot {
-    return snapOf([okAccount("global", [clock.nowMs + offsetMs])]);
+    return snapOf([okAccount("minimax-global", [clock.nowMs + offsetMs])]);
   }
 
   it("fires an interval-reset prefetch at intervalEndAt + 30s after a heartbeat snapshot", async () => {
@@ -325,7 +338,7 @@ describe("RefreshScheduler reset-refresh", () => {
       snapshot: async (_force, reason) => {
         reasons.push(reason);
         callCount += 1;
-        // First call (heartbeat at t=2min): intervalEndAt is now + 5s.
+        // First call (heartbeat at t=2min): intervalEndAt = now + 5s.
         // Second call (interval-reset at t=2min+5.03s): no endAt needed.
         return callCount === 1 ? snapAtOffset(clock, 5_000) : snapOf([]);
       },
@@ -357,7 +370,6 @@ describe("RefreshScheduler reset-refresh", () => {
 
     await clock.advance(HEARTBEAT_MIN_MS);
     expect(reasons).toEqual(["heartbeat"]);
-    // At this point a reset timer is armed for clock.now() + 100 + 30_000 ≈ t=2min+30s.
 
     // Trigger a manual refresh that returns the new intervalEndAt; the old timer must be cancelled
     // and a new one armed for clock.now() + 1h + 30s.
@@ -377,7 +389,7 @@ describe("RefreshScheduler reset-refresh", () => {
     const scheduler = new RefreshScheduler({
       snapshot: async (_force, reason) => {
         reasons.push(reason);
-        return snapOf([okAccount("global", [undefined])]);
+        return snapOf([okAccount("minimax-global", [undefined])]);
       },
     }, clock);
 
@@ -412,7 +424,7 @@ describe("RefreshScheduler reset-refresh", () => {
     expect(reasons).toEqual(["heartbeat"]);
 
     // Mark dirty + go idle BEFORE the reset timer fires (which would be 50ms+30s = ~80ms from now).
-    scheduler.markDirty("cn");
+    scheduler.markDirty("minimax-cn");
     scheduler.onIdle();
 
     // Cross the reset fireAt (t=2min+80ms); idle timer still pending → interval-reset is skipped.

@@ -1,11 +1,13 @@
+import { accountSpec } from "./accounts.js";
 import { UsageCache } from "./cache.js";
-import { configuredRegions, resolveKeys, type ResolvedKeys } from "./credentials.js";
-import { fetchRemains, type FetchLike } from "./fetch.js";
-import { normalizeRemainsPayload } from "./normalize.js";
-import type { AccountSnapshot, CredentialsLike, RefreshReason, Region, UsageSnapshot } from "./types.js";
+import { configuredAccounts, resolveKeys, type ResolvedKeys } from "./credentials.js";
+import { fetchAccountUsage, type FetchLike } from "./fetch.js";
+import { normalizeAccountPayload } from "./normalize.js";
+import type { AccountId, AccountSnapshot, CredentialsLike, RefreshReason, UsageSnapshot } from "./types.js";
 
 const UNCONFIGURED =
-  "未配置 MiniMax 订阅 Key。请到 设置 → 模型 填写 Token Plan 订阅 Key（MINIMAX_API_KEY / MINIMAX_CN_API_KEY）。";
+  "未配置任何订阅 Key。请到 设置 → 模型 填写 MiniMax Token Plan、OpenCode Go 或 GLM 的订阅 Key" +
+  "（MINIMAX_API_KEY / MINIMAX_CN_API_KEY / OPENCODE_GO_API_KEY / GLM_API_KEY）。";
 
 export interface UsageContext {
   get<T = unknown>(name: string): T | undefined;
@@ -13,7 +15,7 @@ export interface UsageContext {
 
 export class UsageService {
   private readonly cache = new UsageCache();
-  private readonly lastOk = new Map<Region, AccountSnapshot>();
+  private readonly lastOk = new Map<AccountId, AccountSnapshot>();
   private readonly fetchImpl: FetchLike;
   private readonly env: NodeJS.ProcessEnv;
   private latest: UsageSnapshot | undefined;
@@ -104,11 +106,11 @@ export class UsageService {
     this.phase = "ready";
   }
 
-  invalidate(region?: Region): void {
-    if (region === undefined) this.cache.clear();
+  invalidate(accountId?: AccountId): void {
+    if (accountId === undefined) this.cache.clear();
     else {
-      const peek = this.cache.peek(region);
-      if (peek !== undefined) this.cache.set(region, peek.account, 0);
+      const peek = this.cache.peek(accountId);
+      if (peek !== undefined) this.cache.set(accountId, peek.account, 0);
     }
   }
 
@@ -125,53 +127,61 @@ export class UsageService {
 
   private async fetchAll(reason: RefreshReason): Promise<UsageSnapshot> {
     const keys = await this.keys();
-    const regions = configuredRegions(keys);
-    if (regions.length === 0) {
+    const accounts = configuredAccounts(keys);
+    if (accounts.length === 0) {
       return { fetchedAt: null, error: UNCONFIGURED, reason, heartbeatMs: this.heartbeatMs, accounts: [] };
     }
 
-    const results = await Promise.all(regions.map((region) => this.loadRegion(region, keys, true)));
-    const accounts = results.map((item) => item.account);
+    const results = await Promise.all(accounts.map((id) => this.loadAccount(id, keys, true)));
+    const list = results.map((item) => item.account);
     const fetchedAt = results.reduce<number | null>((max, item) => {
       if (max === null || item.at > max) return item.at;
       return max;
     }, null);
-    return { fetchedAt, reason, heartbeatMs: this.heartbeatMs, accounts };
+    return { fetchedAt, reason, heartbeatMs: this.heartbeatMs, accounts: list };
   }
 
-  private async loadRegion(
-    region: Region,
+  private async loadAccount(
+    accountId: AccountId,
     keys: ResolvedKeys,
     force: boolean,
   ): Promise<{ at: number; account: AccountSnapshot }> {
     const now = Date.now();
+    const spec = accountSpec(accountId);
     if (!force) {
-      const cached = this.cache.get(region, now);
+      const cached = this.cache.get(accountId, now);
       if (cached !== undefined) return cached;
     }
 
-    const apiKey = keys[region];
+    const apiKey = keys[accountId];
     if (apiKey === undefined) {
       return {
         at: now,
-        account: { region, configured: false, ok: false, error: UNCONFIGURED, models: [] },
+        account: {
+          id: accountId,
+          label: spec.label,
+          configured: false,
+          ok: false,
+          error: UNCONFIGURED,
+          entries: [],
+        },
       };
     }
 
     try {
-      const payload = await fetchRemains(region, apiKey, this.fetchImpl);
-      const account = normalizeRemainsPayload(payload, region, now);
+      const payload = await fetchAccountUsage(spec, apiKey, this.fetchImpl);
+      const account = normalizeAccountPayload(payload, spec, now);
       if (account.ok) {
-        this.cache.set(region, account, now);
-        this.lastOk.set(region, account);
+        this.cache.set(accountId, account, now);
+        this.lastOk.set(accountId, account);
       }
       return { at: now, account };
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
-      const stale = this.lastOk.get(region);
+      const stale = this.lastOk.get(accountId);
       if (stale !== undefined) {
         return {
-          at: this.cache.peek(region)?.at ?? now,
+          at: this.cache.peek(accountId)?.at ?? now,
           account: {
             ...stale,
             stale: true,
@@ -181,7 +191,14 @@ export class UsageService {
       }
       return {
         at: now,
-        account: { region, configured: true, ok: false, error: message, models: [] },
+        account: {
+          id: accountId,
+          label: spec.label,
+          configured: true,
+          ok: false,
+          error: message,
+          entries: [],
+        },
       };
     }
   }

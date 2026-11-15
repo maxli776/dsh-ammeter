@@ -1,4 +1,5 @@
-import type { Region, RefreshReason, UsageSnapshot } from "./types.js";
+import { accountOfProvider } from "./accounts.js";
+import type { AccountId, RefreshReason, UsageSnapshot } from "./types.js";
 
 export const IDLE_DELAY_MS = 15_000;
 export const RUNNING_REFRESH_INTERVAL_MS = 30_000;
@@ -12,10 +13,9 @@ export function nextHeartbeatMs(current: number): number {
   return Math.min(current * 2, HEARTBEAT_MAX_MS);
 }
 
-export function regionOfProvider(provider: unknown): Region | undefined {
-  if (provider === "minimax-cn") return "cn";
-  if (provider === "minimax") return "global";
-  return undefined;
+/** The account a DSH provider id belongs to, if it is one this plugin tracks. */
+export function accountIdOfProvider(provider: unknown): AccountId | undefined {
+  return accountOfProvider(provider);
 }
 
 export interface Clock {
@@ -36,9 +36,10 @@ export interface RefreshTarget {
 }
 
 /**
- * Earliest fire time across all `ok` accounts/models: `intervalEndAt + RESET_REFRESH_DELAY_MS`.
- * Returns undefined when no model carries a usable end time, or when the computed fire time has
- * already passed (the reset already happened — we don't fire in the past).
+ * Earliest fire time across all `ok` accounts: the end of the 5h window plus
+ * {@link RESET_REFRESH_DELAY_MS}. Returns undefined when no account carries a
+ * usable end time, or when the computed fire time has already passed (the
+ * reset already happened — we don't fire in the past).
  */
 export function computeResetFireAt(
   snap: UsageSnapshot | undefined,
@@ -48,8 +49,9 @@ export function computeResetFireAt(
   let earliest: number | undefined;
   for (const account of snap.accounts) {
     if (!account.ok) continue;
-    for (const model of account.models) {
-      const endAt = model.intervalEndAt;
+    for (const entry of account.entries) {
+      const window = entry.windows.find((item) => item.key === "interval");
+      const endAt = window?.endAt;
       if (endAt === undefined) continue;
       if (earliest === undefined || endAt < earliest) earliest = endAt;
     }
@@ -62,9 +64,9 @@ export function computeResetFireAt(
 const DEFAULT_AGENT_KEY = "__default__";
 
 export class RefreshScheduler {
-  private readonly dirty = new Set<Region>();
+  private readonly dirty = new Set<AccountId>();
   private readonly runningAgents = new Set<string>();
-  private readonly minimaxRunningAgents = new Set<string>();
+  private readonly usageRunningAgents = new Set<string>();
   private idleCancel: (() => void) | undefined;
   private heartbeatCancel: (() => void) | undefined;
   private runningCancel: (() => void) | undefined;
@@ -80,8 +82,8 @@ export class RefreshScheduler {
     this.armHeartbeat();
   }
 
-  markDirty(region: Region): void {
-    this.dirty.add(region);
+  markDirty(account: AccountId): void {
+    this.dirty.add(account);
   }
 
   private resolveAgentKey(agentId?: string): string {
@@ -94,27 +96,27 @@ export class RefreshScheduler {
   }
 
   /**
-   * Observe the provider used by one LLM request. MiniMax requests make that
-   * running agent eligible for the 30-second refresh loop; another provider
-   * removes the eligibility without discarding the dirty region used by the
-   * existing idle refresh path.
+   * Observe the provider used by one LLM request. Requests that go to a
+   * tracked subscription make that running agent eligible for the 30-second
+   * refresh loop; another provider removes the eligibility without discarding
+   * the dirty account used by the existing idle refresh path.
    */
-  observeProvider(region: Region | undefined, agentId?: string): void {
+  observeProvider(account: AccountId | undefined, agentId?: string): void {
     const key = this.resolveAgentKey(agentId);
-    if (region === undefined) {
-      this.minimaxRunningAgents.delete(key);
+    if (account === undefined) {
+      this.usageRunningAgents.delete(key);
       this.syncRunningRefresh();
       return;
     }
 
-    this.markDirty(region);
+    this.markDirty(account);
     if (this.runningAgents.has(key)) {
-      this.minimaxRunningAgents.add(key);
+      this.usageRunningAgents.add(key);
       this.syncRunningRefresh();
     }
   }
 
-  get dirtyRegions(): Region[] {
+  get dirtyAccounts(): AccountId[] {
     return [...this.dirty];
   }
 
@@ -124,7 +126,7 @@ export class RefreshScheduler {
 
     const wasRunning = this.runningAgents.size > 0;
     this.runningAgents.add(key);
-    this.minimaxRunningAgents.delete(key);
+    this.usageRunningAgents.delete(key);
     this.clearIdleTimer();
     if (!wasRunning) this.clearHeartbeat();
     this.syncRunningRefresh();
@@ -133,7 +135,7 @@ export class RefreshScheduler {
   onIdle(agentId?: string): void {
     const key = agentId ?? DEFAULT_AGENT_KEY;
     this.runningAgents.delete(key);
-    this.minimaxRunningAgents.delete(key);
+    this.usageRunningAgents.delete(key);
     this.syncRunningRefresh();
 
     // Another Agent is still running, so do not arm a global idle refresh.
@@ -159,7 +161,7 @@ export class RefreshScheduler {
     this.clearRunningRefresh();
     this.clearResetRefresh();
     this.runningAgents.clear();
-    this.minimaxRunningAgents.clear();
+    this.usageRunningAgents.clear();
     this.dirty.clear();
   }
 
@@ -179,7 +181,7 @@ export class RefreshScheduler {
   }
 
   private hasEligibleRunningAgent(): boolean {
-    for (const key of this.minimaxRunningAgents) {
+    for (const key of this.usageRunningAgents) {
       if (this.runningAgents.has(key)) return true;
     }
     return false;
